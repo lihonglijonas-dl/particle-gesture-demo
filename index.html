@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>3D 粒子手势交互系统</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+        }
+
+        /* Loading Screen */
+        #loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            transition: opacity 0.5s;
+        }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #00f3ff;
+            animation: spin 1s ease-in-out infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Canvas Container */
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        /* UI Panel */
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 280px;
+            background: rgba(20, 20, 25, 0.85);
+            backdrop-filter: blur(12px);
+            padding: 20px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+            transition: transform 0.3s ease;
+        }
+        
+        #ui-panel.collapsed {
+            transform: translateX(120%);
+        }
+
+        h2 {
+            margin: 0 0 15px 0;
+            font-size: 1.1rem;
+            color: #00f3ff;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+
+        /* Custom Inputs */
+        input[type="color"] {
+            -webkit-appearance: none;
+            border: none;
+            width: 100%;
+            height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            background: none;
+        }
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+        input[type="color"]::-webkit-color-swatch {
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #00f3ff 0%, #0066ff 100%);
+            border: none;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+            transition: opacity 0.2s;
+            text-align: center;
+            display: block;
+            box-sizing: border-box;
+            font-size: 0.9rem;
+        }
+        .btn:hover {
+            opacity: 0.9;
+        }
+        .btn-outline {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.2);
+            margin-top: 10px;
+        }
+        .btn-outline:hover {
+            background: rgba(255,255,255,0.05);
+        }
+
+        /* Camera Preview */
+        #video-preview {
+            width: 100%;
+            height: 150px;
+            background: #000;
+            border-radius: 8px;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror effect: THIS is the reason for X-axis inversion in mapping */
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        /* Status Indicator */
+        .status {
+            font-size: 0.75rem;
+            margin-top: 5px;
+            color: #666;
+            text-align: right;
+        }
+        .status.active { color: #00f3ff; }
+        .status.dual-hand { color: #ffeb3b; }
+
+        /* Toggle Button */
+        #toggle-ui {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 11;
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none; /* Shown when panel is hidden */
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(5px);
+        }
+
+        .guide-text {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 10px;
+            line-height: 1.4;
+            background: rgba(255,255,255,0.05);
+            padding: 10px;
+            border-radius: 8px;
+        }
+    </style>
+    <!-- Import Map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <!-- Loading Screen -->
+    <div id="loader">
+        <div class="spinner"></div>
+        <div>正在初始化神经网络与 3D 引擎...</div>
+    </div>
+
+    <!-- WebGL Canvas -->
+    <div id="canvas-container"></div>
+    
+    <!-- UI Panel -->
+    <button id="toggle-ui">⚙️</button>
+    <div id="ui-panel">
+        <h2>
+            控制面板
+            <span style="cursor:pointer; opacity:0.5;" onclick="toggleUI()">✕</span>
+        </h2>
+        
+        <div class="control-group">
+            <video id="video-preview" playsinline></video>
+            <div class="status" id="hand-status">等待摄像头...</div>
+        </div>
+        
+        <!-- DEBUG INFO START -->
+        <div class="control-group">
+            <label>实时手势数值:</label>
+            <div id="debug-pinch-dist" style="font-size: 1.2rem; color: #ffeb3b; text-align: center; background: rgba(0,0,0,0.4); padding: 8px; border-radius: 6px;">--</div>
+        </div>
+        <!-- DEBUG INFO END -->
+
+        <div class="control-group">
+            <label>粒子颜色</label>
+            <input type="color" id="color-picker" value="#00f3ff">
+        </div>
+
+        <div class="control-group">
+            <label>模型源</label>
+            <label for="file-upload" class="btn">上传图片创建模型</label>
+            <input type="file" id="file-upload" accept="image/*">
+            <div class="guide-text">
+                提示: 使用黑色背景、主体清晰的图片效果最佳。
+            </div>
+        </div>
+
+        <div class="control-group">
+            <button id="fullscreen-btn" class="btn btn-outline">⛶ 全屏模式</button>
+        </div>
+
+        <div class="guide-text">
+            <b>交互指南 (已优化):</b><br>
+            ✋ 单手: 旋转模型 + 全局扩散/聚合<br>
+            ✋✋ 双手: 固定模型，**靠近屏幕左侧的手** (通常是您的右手) 将**如同触摸画布**一般进行**局部推开**互动。
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- Configuration ---
+        const CONFIG = {
+            // 粒子数量增加一倍
+            particleCount: 100000,
+            // 粒子颗粒度稍增大，提升亮度
+            particleSize: 0.02, // 调整: 从 0.015 增加到 0.02
+            defaultColor: 0x00f3ff,
+            dispersionFactor: 0, 
+            depth: 0.5,
+            
+            // 局部交互参数 (已优化)
+            LOCAL_INTERACTION_RADIUS: 2.0, // 局部互动影响范围
+            LOCAL_INTERACTION_STRENGTH: 0.08, // 局部推力强度
+            MAX_PARTICLE_DISPLACEMENT: 3.0, 
+            PARTICLE_REVERSION_SPEED: 0.03, // 粒子复原速度
+            HAND_MAPPING_SCALE: 5.5, // 手势映射到 3D 空间的范围
+        };
+
+        // --- State ---
+        let scene, camera, renderer, particles, geometry;
+        let originalPositions = []; 
+        let targetRotation = new THREE.Vector2();
+        let isHandDetected = false;
+        let isDualHandMode = false; 
+        let localInteractionPoint = new THREE.Vector3(100, 100, 100); 
+
+        // --- Initialization ---
+        function init() {
+            // 场景设置
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // 控制器（禁用 OrbitControls）
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.enabled = false; 
+
+            // 默认粒子系统 (球体)
+            createDefaultParticles();
+
+            // 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            // 事件监听
+            window.addEventListener('resize', onWindowResize);
+            document.getElementById('color-picker').addEventListener('input', updateColor);
+            document.getElementById('file-upload').addEventListener('change', handleImageUpload);
+            document.getElementById('fullscreen-btn').addEventListener('click', toggleFullScreen);
+
+            // 启动
+            animate();
+            initMediaPipe();
+        }
+
+        // --- Particle System Logic ---
+
+        function createDefaultParticles() {
+            if(particles) scene.remove(particles);
+
+            const geom = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const colorObj = new THREE.Color(CONFIG.defaultColor);
+
+            // 创建球体粒子
+            const radius = 2;
+            for (let i = 0; i < CONFIG.particleCount; i++) {
+                const phi = Math.acos(-1 + (2 * i) / CONFIG.particleCount);
+                const theta = Math.sqrt(CONFIG.particleCount * Math.PI) * phi;
+
+                const x = radius * Math.cos(theta) * Math.sin(phi);
+                const y = radius * Math.sin(theta) * Math.sin(phi);
+                const z = radius * Math.cos(phi);
+
+                positions.push(x, y, z);
+                colors.push(colorObj.r, colorObj.g, colorObj.b);
+                originalPositions.push(x, y, z);
+            }
+
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: CONFIG.particleSize,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 1.0 // 调整: 提高不透明度到最大，进一步增加亮度和清晰度
+            });
+
+            particles = new THREE.Points(geom, material);
+            scene.add(particles);
+            geometry = geom;
+            
+            // 隐藏加载器
+            document.getElementById('loader').style.opacity = '0';
+            setTimeout(() => document.getElementById('loader').style.display = 'none', 500);
+        }
+
+        function handleImageUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    createParticlesFromImage(img);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function createParticlesFromImage(img) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // 调整图片大小以控制粒子数量
+            const maxSize = 400; 
+            let width = img.width;
+            let height = img.height;
+            
+            if (width > height) {
+                if (width > maxSize) {
+                    height *= maxSize / width;
+                    width = maxSize;
+                }
+            } else {
+                if (height > maxSize) {
+                    width *= maxSize / height;
+                    height = maxSize;
+                }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(img, 0, 0, width, height);
+
+            const imgData = ctx.getImageData(0, 0, width, height);
+            const data = imgData.data;
+
+            const positions = [];
+            const colors = [];
+            originalPositions = [];
+            
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const i = (y * width + x) * 4;
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+                    const a = data[i + 3];
+
+                    // 亮度/Alpha过滤
+                    const brightness = (r + g + b) / 3;
+                    
+                    if (a > 128 && brightness > 30) {
+                        // 映射 2D (x,y) 到 3D 空间
+                        const pX = (x - width / 2) * 0.03;
+                        const pY = -(y - height / 2) * 0.03; // 反转 Y 轴
+                        const pZ = (Math.random() - 0.5) * CONFIG.depth;
+
+                        positions.push(pX, pY, pZ);
+                        originalPositions.push(pX, pY, pZ); 
+                        
+                        // 使用原始图像颜色
+                        const pixelColor = new THREE.Color(`rgb(${r},${g},${b})`);
+                        
+                        colors.push(pixelColor.r, pixelColor.g, pixelColor.b);
+                    }
+                }
+            }
+            
+            // 由于用户要求粒子量增加一倍，如果图片生成的粒子数量太少，我们在这里循环增加到目标数量（虽然效果可能重复）
+            // 注意: 图像创建的模型粒子数量取决于图像像素，这里仅是确保如果图片像素很多，粒子数量上限能覆盖 100000 
+            // 实际粒子数量仍受限于图像像素
+            if (positions.length / 3 < CONFIG.particleCount) {
+                 // The default image creation process limits particles to image pixels.
+                 // We will skip forcing the count here, as multiplying particles from an image
+                 // often creates redundant data and is generally bad practice for 3D reconstruction.
+                 // The CONFIG.particleCount mainly applies to the default sphere model.
+            }
+
+
+            if(particles) scene.remove(particles);
+
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: CONFIG.particleSize,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 1.0 // 调整: 提高不透明度到最大，进一步增加亮度和清晰度
+            });
+
+            particles = new THREE.Points(geom, material);
+            scene.add(particles);
+            geometry = geom;
+        }
+
+        function updateColor(e) {
+            if (!particles) return;
+            const color = new THREE.Color(e.target.value);
+            const colors = particles.geometry.attributes.color;
+            
+            for (let i = 0; i < colors.count; i++) {
+                colors.setXYZ(i, color.r, color.g, color.b);
+            }
+            colors.needsUpdate = true;
+            CONFIG.defaultColor = color.getHex();
+        }
+
+        // --- MediaPipe Hands Integration ---
+        
+        function initMediaPipe() {
+            const videoElement = document.getElementById('video-preview');
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onHandsResults);
+
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 320,
+                height: 240
+            });
+            cameraUtils.start();
+        }
+        
+        /**
+         * 将 MediaPipe 的归一化 2D 坐标映射到 Three.js 场景 3D 坐标
+         * 优化点：反转X轴映射，以匹配屏幕的视觉镜像，实现“触摸画布”的效果。
+         * @param {object} normalizedHandPoint - MediaPipe 坐标 (x, y, z)
+         * @param {number} mappingScale - 映射比例，决定手势移动的敏感度
+         * @returns {THREE.Vector3} 对应的 3D 坐标
+         */
+        function mapHandToWorld(normalizedHandPoint, mappingScale = CONFIG.HAND_MAPPING_SCALE) {
+            const worldPos = new THREE.Vector3();
+            
+            // 关键优化：反转 X 轴 (1 - x) 以消除摄像头的镜像效果
+            const invertedX = 1 - normalizedHandPoint.x; 
+            
+            // X: 映射 (0 to 1) [invertedX] 到 (-scale/2 to scale/2) [worldPos.x]
+            worldPos.x = (invertedX - 0.5) * mappingScale;
+            // Y: 映射 (0 to 1) 到 (scale/2 to -scale/2)
+            worldPos.y = -(normalizedHandPoint.y - 0.5) * mappingScale; 
+            // Z: 保持 Z 轴在模型中心平面 (Z=0)
+            worldPos.z = 0; 
+            return worldPos;
+        }
+
+        function onHandsResults(results) {
+            const statusEl = document.getElementById('hand-status');
+            const debugEl = document.getElementById('debug-pinch-dist');
+            
+            const handLandmarks = results.multiHandLandmarks;
+            const numHands = handLandmarks ? handLandmarks.length : 0;
+
+            if (numHands > 0) {
+                isHandDetected = true;
+                
+                // --- 双手模式 (局部互动) ---
+                if (numHands >= 2) {
+                    isDualHandMode = true;
+                    statusEl.textContent = `检测到双手: 局部互动模式 (靠近屏幕左侧的手)**`;
+                    statusEl.classList.remove('active');
+                    statusEl.classList.add('dual-hand');
+                    
+                    // 遍历所有检测到的手，寻找局部互动手
+                    let localInteractionHand = null;
+                    let primaryHand = null;
+                    let debugHandedness = 'N/A';
+                    
+                    // 核心修正：由于视频镜像和3D坐标系的关系，
+                    // MediaPipe 标签为 'Right' (用户的右手) 的手会映射到 3D 模型的左侧 (-X)，
+                    // 而标签为 'Left' (用户的左手) 的手会映射到 3D 模型的右侧 (+X)。
+                    // 为了让用户能用靠近屏幕左侧的手（右手）推动模型的左侧，我们将 'Right' 手设为局部交互手。
+                    for (let i = 0; i < handLandmarks.length; i++) {
+                        const handedness = results.multiHandedness[i].label;
+                        debugHandedness += ` H${i}: ${handedness}`;
+                        
+                        if (handedness === 'Right') { // *** 局部交互手改为 'Right'
+                            localInteractionHand = handLandmarks[i];
+                        } else if (handedness === 'Left') {
+                            primaryHand = handLandmarks[i];
+                        }
+                    }
+
+                    // 容错: 如果没有明确的交互手标签，使用第二只检测到的手作为局部互动手
+                    if (!localInteractionHand) {
+                         localInteractionHand = handLandmarks[1];
+                    }
+                    
+                    // 使用中指掌指关节 (Landmark 9) 作为更精确的交互点
+                    const interactionPoint = localInteractionHand[9]; 
+                    // 使用更新后的 mapHandToWorld 实现“触摸画布”效果
+                    localInteractionPoint.copy(mapHandToWorld(interactionPoint));
+
+                    // 双手模式下，全局扩散/聚合功能不激活
+                    CONFIG.dispersionFactor = 0;
+                    debugEl.textContent = `双人模式 | H: ${debugHandedness} | L.X: ${localInteractionPoint.x.toFixed(2)}`;
+
+                } 
+                // --- 单手模式 (全局旋转和扩散) ---
+                else {
+                    isDualHandMode = false;
+                    statusEl.textContent = `检测到单手: 旋转/全局扩散模式`;
+                    statusEl.classList.add('active');
+                    statusEl.classList.remove('dual-hand');
+                    
+                    // 单手模式下，互动点移到屏幕外，确保没有局部推力
+                    localInteractionPoint.set(100, 100, 100);
+
+                    const hand1 = handLandmarks[0];
+                    const wrist = hand1[0]; 
+                    
+                    // 1. 旋转逻辑 (保持原有的非反转逻辑，因为旋转是全局效果)
+                    const targetX = (wrist.x - 0.5) * 2; 
+                    const targetY = (wrist.y - 0.5) * 2;
+                    targetRotation.x = targetY * 2; 
+                    targetRotation.y = targetX * 2; 
+
+                    // 2. 全局扩散逻辑 (捏合/张开)
+                    const thumb = hand1[4];
+                    const index = hand1[8];
+                    const pinchDist = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
+                    
+                    const minPinch = 0.036; 
+                    const maxOpen = 0.15; 
+                    const normalizedOpenness = Math.max(0, Math.min(1, (pinchDist - minPinch) / (maxOpen - minPinch)));
+                    
+                    CONFIG.dispersionFactor = normalizedOpenness * 5.0; 
+
+                    debugEl.textContent = `单人模式 | P: ${pinchDist.toFixed(3)} | D: ${CONFIG.dispersionFactor.toFixed(2)}`;
+                }
+
+            } else {
+                // --- 未检测到手势 ---
+                isHandDetected = false;
+                isDualHandMode = false;
+                statusEl.textContent = "未检测到手势";
+                statusEl.classList.remove('active');
+                statusEl.classList.remove('dual-hand');
+                
+                // 自动旋转 and smoothly return dispersion to 0
+                CONFIG.dispersionFactor = THREE.MathUtils.lerp(CONFIG.dispersionFactor, 0, 0.02);
+                localInteractionPoint.set(100, 100, 100); // 将互动点移到屏幕外
+                
+                debugEl.textContent = `--`;
+            }
+        }
+
+        // --- Animation Loop ---
+        const tempVector = new THREE.Vector3();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = Date.now() * 0.001;
+
+            if (particles && geometry) {
+                const positions = geometry.attributes.position.array;
+                const reversionSpeed = CONFIG.PARTICLE_REVERSION_SPEED; 
+                
+                // --- 旋转逻辑 ---
+                if (!isDualHandMode && isHandDetected) {
+                    particles.rotation.x += (targetRotation.x - particles.rotation.x) * 0.05;
+                    particles.rotation.y += (targetRotation.y - particles.rotation.y) * 0.05;
+                } else if (!isHandDetected) {
+                    particles.rotation.y += 0.002;
+                }
+
+                // --- 粒子位置更新 ---
+                for (let i = 0; i < positions.length; i += 3) {
+                    const ox = originalPositions[i];
+                    const oy = originalPositions[i + 1];
+                    const oz = originalPositions[i + 2];
+                    
+                    const currentX = positions[i];
+                    const currentY = positions[i + 1];
+                    const currentZ = positions[i + 2];
+
+                    const noiseX = Math.sin(time + oy) * 0.02;
+                    const noiseY = Math.cos(time + ox) * 0.02;
+
+                    let newX = currentX;
+                    let newY = currentY;
+                    let newZ = currentZ;
+                    
+                    // 1. 全局扩散/聚合
+                    if (!isDualHandMode && CONFIG.dispersionFactor > 0.01) {
+                        let dirX = ox;
+                        let dirY = oy;
+                        let dirZ = oz;
+                        
+                        const len = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ) || 1;
+                        dirX /= len;
+                        dirY /= len;
+                        dirZ /= len;
+
+                        const spread = CONFIG.dispersionFactor * (1 + Math.random());
+                        
+                        newX = ox + (dirX * spread);
+                        newY = oy + (dirY * spread);
+                        newZ = oz + (dirZ * spread);
+                    }
+
+                    // 2. 局部互动 (仅双手模式下)
+                    if (isDualHandMode && localInteractionPoint.x < 99) { 
+                        tempVector.set(currentX, currentY, currentZ);
+                        const distance = tempVector.distanceTo(localInteractionPoint);
+                        
+                        if (distance < CONFIG.LOCAL_INTERACTION_RADIUS) {
+                            
+                            tempVector.sub(localInteractionPoint).normalize(); 
+                            
+                            const pushStrength = (CONFIG.LOCAL_INTERACTION_RADIUS - distance) / CONFIG.LOCAL_INTERACTION_RADIUS;
+                            const force = pushStrength * CONFIG.LOCAL_INTERACTION_STRENGTH; 
+                            
+                            newX = currentX + tempVector.x * force;
+                            newY = currentY + tempVector.y * force;
+                            newZ = currentZ + tempVector.z * force;
+                            
+                        } else {
+                            // 不在影响范围内的粒子，平滑地回归到它们的原始位置
+                            newX = THREE.MathUtils.lerp(currentX, ox, reversionSpeed);
+                            newY = THREE.MathUtils.lerp(currentY, oy, reversionSpeed);
+                            newZ = THREE.MathUtils.lerp(currentZ, oz, reversionSpeed);
+                        }
+                    } else if (CONFIG.dispersionFactor < 0.01) {
+                         // 在单手聚合模式或空闲模式下，粒子平滑回归原始位置
+                         newX = THREE.MathUtils.lerp(currentX, ox, reversionSpeed);
+                         newY = THREE.MathUtils.lerp(currentY, oy, reversionSpeed);
+                         newZ = THREE.MathUtils.lerp(currentZ, oz, reversionSpeed);
+                    }
+                    
+                    // 最终应用位置 (包括噪音)
+                    positions[i] = newX + noiseX;
+                    positions[i+1] = newY + noiseY;
+                    positions[i+2] = newZ; 
+
+                    // 限制粒子最大位移
+                    const distFromOrigin = Math.sqrt(
+                        (positions[i] - ox) ** 2 + 
+                        (positions[i+1] - oy) ** 2 + 
+                        (positions[i+2] - oz) ** 2
+                    );
+                    
+                    if (distFromOrigin > CONFIG.MAX_PARTICLE_DISPLACEMENT) {
+                        tempVector.set(positions[i] - ox, positions[i+1] - oy, positions[i+2] - oz);
+                        tempVector.normalize().multiplyScalar(CONFIG.MAX_PARTICLE_DISPLACEMENT);
+                        
+                        positions[i] = ox + tempVector.x;
+                        positions[i+1] = oy + tempVector.y;
+                        positions[i+2] = oz + tempVector.z;
+                    }
+
+                }
+                
+                geometry.attributes.position.needsUpdate = true;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Utilities ---
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        async function toggleFullScreen() {
+            const statusEl = document.getElementById('hand-status');
+            try {
+                if (!document.fullscreenElement) {
+                    await document.documentElement.requestFullscreen();
+                } else {
+                    if (document.exitFullscreen) {
+                        await document.exitFullscreen();
+                    }
+                }
+            } catch (err) {
+                // 原生全屏失败，这是 iFrame 环境的常见限制
+                console.warn("Fullscreen toggle failed:", err);
+                
+                // 给出明确的错误提示和替代方案
+                statusEl.textContent = "❗ 无法启动全屏: 当前环境(iFrame)限制。请使用右上角的 '✕' 或 '⚙️' 来隐藏/显示控制面板以获得最大视图。";
+                statusEl.style.color = "#ff6b6b"; 
+                
+                setTimeout(() => {
+                    statusEl.style.color = "";
+                    if (!isHandDetected) {
+                        statusEl.textContent = "未检测到手势";
+                    } else if (isDualHandMode) {
+                         statusEl.textContent = `检测到双手: 局部互动模式 (靠近屏幕左侧的手)**`;
+                    } else {
+                         statusEl.textContent = `检测到单手: 旋转/全局扩散模式`;
+                    }
+                }, 5000); // 提示持续 5 秒
+            }
+        }
+        
+        // Expose UI toggle to global scope
+        window.toggleUI = function() {
+            const panel = document.getElementById('ui-panel');
+            const btn = document.getElementById('toggle-ui');
+            
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+                setTimeout(() => panel.classList.remove('collapsed'), 10);
+                btn.style.display = 'none';
+            } else {
+                panel.classList.add('collapsed');
+                setTimeout(() => {
+                    panel.style.display = 'none';
+                    btn.style.display = 'flex';
+                }, 300);
+            }
+        };
+
+        // UI Toggle Event listener (for the button)
+        document.getElementById('toggle-ui').addEventListener('click', window.toggleUI);
+
+        // Init
+        init();
+
+    </script>
+</body>
+</html>
